@@ -55,3 +55,16 @@ class TicketRead(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = Field(default=None, max_length=36)
+
+
+class ChatReply(BaseModel):
+    conversation_id: str
+    intent: str
+    workflow: str
+    message: str
+    completed: bool = False

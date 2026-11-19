@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, Index, String, func, text
+from sqlalchemy import CheckConstraint, DateTime, Index, JSON, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -51,6 +52,25 @@ class SupportTicket(Base):
     subject: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(String(5000), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    active_workflow: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,

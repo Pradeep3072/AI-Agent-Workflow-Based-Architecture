@@ -9,7 +9,8 @@ from app.api import router as api_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create any missing tables when the development app starts."""
+    """Create any missing tables when t
+    0he development app starts."""
     Base.metadata.create_all(bind=engine)
     yield
 

@@ -61,6 +61,8 @@ These are starting choices, not claims that every component is required on day o
 ## Core data and safety rules
 
 - SQLite is the source of truth for users, appointments, tickets, and durable conversation records in the initial single-instance deployment.
+- Conversation records store the active workflow and its collected fields so a multi-message workflow can resume after each API request.
+- Appointment and support-ticket intake collect required fields through explicit workflow steps before writing durable records.
 - Appointment creation must be protected by a database constraint or transaction so concurrent requests cannot reserve the same slot.
 - Ticket IDs must be unique, and ticket status changes must be persisted.
 - RAG supports two source-ingestion paths: users upload documents, or submit a URL for page retrieval and scraping.

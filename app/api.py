@@ -5,16 +5,72 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Appointment, SupportTicket
+from app.models import Appointment, Conversation, SupportTicket
 from app.schemas import (
     AppointmentCreate,
     AppointmentRead,
+    ChatReply,
+    ChatRequest,
     TicketCreate,
     TicketRead,
+)
+from app.workflows import (
+    Intent,
+    WorkflowReply,
+    continue_appointment_workflow,
+    continue_ticket_workflow,
+    route_message,
+    start_appointment_workflow,
+    start_ticket_workflow,
 )
 
 
 router = APIRouter(prefix="/api/v1")
+
+
+@router.post("/chat", response_model=ChatReply)
+def chat(request: ChatRequest, database: Session = Depends(get_db)) -> ChatReply:
+    """Classify a new message or continue the workflow stored for its conversation."""
+    conversation = None
+    if request.conversation_id is not None:
+        conversation = database.get(Conversation, request.conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    if conversation is not None and conversation.active_workflow == "appointment_booking":
+        try:
+            result = continue_appointment_workflow(conversation, request.message, database)
+            database.commit()
+        except IntegrityError:
+            database.rollback()
+            conversation = database.get(Conversation, request.conversation_id)
+            result = WorkflowReply(
+                intent=Intent.BOOKING,
+                workflow="appointment_booking",
+                message="That slot is already booked. Please send a different date and time in ISO format with a timezone.",
+            )
+            database.commit()
+    elif conversation is not None and conversation.active_workflow == "support_ticket":
+        result = continue_ticket_workflow(conversation, request.message, database)
+        database.commit()
+    else:
+        result = route_message(request.message)
+        conversation = Conversation()
+        database.add(conversation)
+        if result.intent == Intent.BOOKING:
+            result = start_appointment_workflow(conversation)
+        elif result.intent == Intent.SUPPORT_TICKET:
+            result = start_ticket_workflow(conversation)
+        database.commit()
+        database.refresh(conversation)
+
+    return ChatReply(
+        conversation_id=conversation.id,
+        intent=result.intent.value,
+        workflow=result.workflow,
+        message=result.message,
+        completed=result.completed,
+    )
 
 
 @router.post(
