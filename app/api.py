@@ -1,11 +1,12 @@
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from google.genai import types
 
 from app.database import get_db
-from app.models import Appointment, Conversation, SupportTicket
+from app.models import Appointment, LegacyConversation, SupportTicket
 from app.schemas import (
     AppointmentCreate,
     AppointmentRead,
@@ -14,62 +15,86 @@ from app.schemas import (
     TicketCreate,
     TicketRead,
 )
-from app.workflows import (
-    Intent,
-    WorkflowReply,
-    continue_appointment_workflow,
-    continue_ticket_workflow,
-    route_message,
-    start_appointment_workflow,
-    start_ticket_workflow,
-)
-
-
 router = APIRouter(prefix="/api/v1")
 
 
 @router.post("/chat", response_model=ChatReply)
-def chat(request: ChatRequest, database: Session = Depends(get_db)) -> ChatReply:
-    """Classify a new message or continue the workflow stored for its conversation."""
-    conversation = None
-    if request.conversation_id is not None:
-        conversation = database.get(Conversation, request.conversation_id)
-        if conversation is None:
-            raise HTTPException(status_code=404, detail="Conversation not found.")
+async def chat(
+    request: ChatRequest,
+    http_request: Request,
+    database: Session = Depends(get_db),
+) -> ChatReply:
+    """Create or resume an ADK session and execute the root workflow."""
+    session_service = http_request.app.state.adk_session_service
+    runner = http_request.app.state.adk_runner
+    user_id = "local_user"
+    app_name = http_request.app.state.adk_app_name
 
-    if conversation is not None and conversation.active_workflow == "appointment_booking":
-        try:
-            result = continue_appointment_workflow(conversation, request.message, database)
-            database.commit()
-        except IntegrityError:
-            database.rollback()
-            conversation = database.get(Conversation, request.conversation_id)
-            result = WorkflowReply(
-                intent=Intent.BOOKING,
-                workflow="appointment_booking",
-                message="That slot is already booked. Please send a different date and time in ISO format with a timezone.",
+    if request.conversation_id:
+        session = await session_service.get_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=request.conversation_id,
+        )
+        if session is None:
+            legacy = database.get(LegacyConversation, request.conversation_id)
+            if legacy is None:
+                raise HTTPException(status_code=404, detail="Conversation not found.")
+
+            initial_state = {}
+            if legacy.active_workflow == "appointment_booking":
+                initial_state = {
+                    "active_workflow": "appointment_booking",
+                    "booking": legacy.state,
+                    "last_intent": "booking",
+                    "last_workflow": "appointment_booking",
+                    "turn_completed": False,
+                }
+            elif legacy.active_workflow == "support_ticket":
+                initial_state = {
+                    "active_workflow": "support_ticket",
+                    "ticket": legacy.state,
+                    "last_intent": "support_ticket",
+                    "last_workflow": "support_ticket",
+                    "turn_completed": False,
+                }
+
+            session = await session_service.create_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=legacy.id,
+                state=initial_state,
             )
-            database.commit()
-    elif conversation is not None and conversation.active_workflow == "support_ticket":
-        result = continue_ticket_workflow(conversation, request.message, database)
-        database.commit()
     else:
-        result = route_message(request.message)
-        conversation = Conversation()
-        database.add(conversation)
-        if result.intent == Intent.BOOKING:
-            result = start_appointment_workflow(conversation)
-        elif result.intent == Intent.SUPPORT_TICKET:
-            result = start_ticket_workflow(conversation)
-        database.commit()
-        database.refresh(conversation)
+        session = await session_service.create_session(app_name=app_name, user_id=user_id)
 
+    message = types.Content(
+        role="user",
+        parts=[types.Part(text=request.message)],
+    )
+    response_text = "The workflow completed without a text response."
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session.id,
+        new_message=message,
+    ):
+        if event.author != "user" and event.content and event.content.parts:
+            text_parts = [part.text for part in event.content.parts if part.text]
+            if text_parts:
+                response_text = "".join(text_parts)
+
+    updated_session = await session_service.get_session(
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session.id,
+    )
+    state = updated_session.state if updated_session else {}
     return ChatReply(
-        conversation_id=conversation.id,
-        intent=result.intent.value,
-        workflow=result.workflow,
-        message=result.message,
-        completed=result.completed,
+        conversation_id=session.id,
+        intent=state.get("last_intent", "unknown"),
+        workflow=state.get("last_workflow", "clarification"),
+        message=response_text,
+        completed=state.get("turn_completed", False),
     )
 
 

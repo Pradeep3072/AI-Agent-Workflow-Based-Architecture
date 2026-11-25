@@ -23,7 +23,6 @@ class Appointment(Base):
             name="ck_appointment_status",
         ),
     )
-
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     customer_name: Mapped[str] = mapped_column(String(200), nullable=False)
     customer_email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
@@ -65,20 +64,13 @@ class SupportTicket(Base):
     )
 
 
-class Conversation(Base):
+class LegacyConversation(Base):
+    """Read-only compatibility for conversations created before the ADK migration."""
+
     __tablename__ = "conversations"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
     active_workflow: Mapped[str | None] = mapped_column(String(50), nullable=True)
     state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        nullable=False,
-        server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
